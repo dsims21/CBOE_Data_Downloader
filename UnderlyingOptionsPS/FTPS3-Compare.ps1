@@ -5,12 +5,6 @@
 #AWS Tools for Powershell
 #AWS CLI
 
-#Set permissions and import necessary libraries
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned  
-import-module "C:\Program Files (x86)\AWS Tools\PowerShell\AWSPowerShell\AWSPowerShell.psd1"
-Set-AWSCredential -ProfileName S3access
-Initialize-AWSDefaults
-
 #Sets a class of connection information to interate through
 class InfoClass {
     [string]$S3SubFolder #S3://[Folder]/
@@ -22,6 +16,83 @@ class InfoClass {
 	[string]$athenaTable #Query table Athena uses
 	[string]$friendlyName #For Text message header
 }
+
+function GetFilesListAsArray($user,$pass,$local_target,$ftp_uri,$subfolder){
+ # ftp address from where to download the files
+ [system.URI] $uri = $ftp_uri + $subfolder
+ 
+$ftp=[system.net.ftpwebrequest]::Create($uri)
+ 
+if($user)
+ {
+	$ftp.Credentials=New-Object System.Net.NetworkCredential($user,$pass)
+ }
+ #Get a list of files in the current directory.
+ #Use ListDirectoryDetails instead if you need date, size and other additional file information.
+ $ftp.Method=[system.net.WebRequestMethods+ftp]::ListDirectoryDetails
+ $ftp.UsePassive=$true
+ 
+try
+{
+	 $response=$ftp.GetResponse()
+	 $strm=$response.GetResponseStream()
+	 $reader=New-Object System.IO.StreamReader($strm,'UTF-8')
+	 $list=$reader.ReadToEnd()
+	 $lines=$list.Split("`n")
+	 return $lines
+}
+ catch{
+	$_|fl * -Force
+ }
+}
+
+#################################################    Downloads Delta   ################################################################################
+
+function DownloadFile ($sourceuri,$targetpath,$username,$password){
+ # Create a FTPWebRequest object to handle the connection to the ftp server
+ $ftprequest = [System.Net.FtpWebRequest]::create($sourceuri)
+ 
+# set the request's network credentials for an authenticated connection
+ $ftprequest.Credentials = New-Object System.Net.NetworkCredential($username,$password)
+ 
+$ftprequest.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
+ $ftprequest.UseBinary = $true
+ $ftprequest.KeepAlive = $false
+ 
+# send the ftp request to the server
+ $ftpresponse = $ftprequest.GetResponse()
+ 
+# get a download stream from the server response
+ $responsestream = $ftpresponse.GetResponseStream()
+ 
+# create the target file on the local system and the download buffer
+ try
+ {
+ $targetfile = New-Object IO.FileStream ($targetpath,[IO.FileMode]::Create)
+ "File created: $targetpath"
+ [byte[]]$readbuffer = New-Object byte[] 1024
+ 
+# loop through the download stream and send the data to the target file
+ do{
+ $readlength = $responsestream.Read($readbuffer,0,1024)
+ $targetfile.Write($readbuffer,0,$readlength)
+ }
+ while ($readlength -ne 0)
+ 
+$targetfile.close()
+ }
+ catch
+ {
+ $_|fl * -Force
+ }
+ 
+}
+
+#Set permissions and import necessary libraries
+import-module "C:\Program Files (x86)\AWS Tools\PowerShell\AWSPowerShell\AWSPowerShell.psd1"
+Set-AWSCredential -ProfileName S3access
+Initialize-AWSDefaults
+
 
 #Populates information into [Options Trades]
 $UnderlyingOptionsInfo = [InfoClass]::new() 
@@ -102,12 +173,10 @@ if($filelist -eq $null){
 
 	if (!(Test-Path "C:\FTPTest\error.txt"))
 	{
-		New-Item -path C:\FTPTest -name error.txt -type "file" -value "$theDate : Could not connect to S3. Please debug."
+		New-Item -path C:\FTPTest -name error.txt -type "file"
 	}
-	else
-	{
-		Add-Content -path C:\FTPTest\error.txt -value "$theDate : Could not connect to S3. Please debug."
-	}
+
+	Add-Content -path C:\FTPTest\error.txt -value "$theDate : Could not connect to S3. Please debug."
 	
 	exit
 }
@@ -118,9 +187,10 @@ foreach ($file in $filelist){
 
 	#If the item in the list contains a search term (from the file name) then keep it. 
 	#Some S3 buckets contain folders that would return bad matches. 
-	if ($file -match ($info.fileNamePrefix)) {     
-		$AWSlist.Add($AWSrx.Match($file.ToString()))
-		}
+	$infoMatch = $AWSrx.Match($file.ToString())
+	if ($infoMatch.Success) {     
+		$AWSlist.Add($infoMatch)
+	}
 }
 
 #$AWSlist
@@ -136,36 +206,6 @@ $subfolder1=$info.FTPSubFolder
 
 ##Instantiates a list
 $FTPlist = New-Object 'System.Collections.Generic.List[String]'
-
-function GetFilesListAsArray($user,$pass,$local_target,$ftp_uri,$subfolder){
- # ftp address from where to download the files
- $ftp_urix = $ftp_uri + $subfolder
- $uri=[system.URI] $ftp_urix
- 
-$ftp=[system.net.ftpwebrequest]::Create($uri)
- 
-if($user)
- {
- $ftp.Credentials=New-Object System.Net.NetworkCredential($user,$pass)
- }
- #Get a list of files in the current directory.
- #Use ListDirectoryDetails instead if you need date, size and other additional file information.
- $ftp.Method=[system.net.WebRequestMethods+ftp]::ListDirectoryDetails
- $ftp.UsePassive=$true
- 
-try
- {
- $response=$ftp.GetResponse()
- $strm=$response.GetResponseStream()
- $reader=New-Object System.IO.StreamReader($strm,'UTF-8')
- $list=$reader.ReadToEnd()
- $lines=$list.Split("`n")
- return $lines
- }
- catch{
- $_|fl * -Force
- }
-}
 
 #Brings FTP data into an array
 $FTParray = GetFilesListAsArray $user1 $pass1 $local_target1 $ftp_uri1 $subfolder1
@@ -195,48 +235,6 @@ foreach ($file in $FTParray){
 $final = $FTPlist | ?{$AWSlist -notcontains $_}
 
 #$final
-
-#################################################    Downloads Delta   ################################################################################
-
-function DownloadFile ($sourceuri,$targetpath,$username,$password){
- # Create a FTPWebRequest object to handle the connection to the ftp server
- $ftprequest = [System.Net.FtpWebRequest]::create($sourceuri)
- 
-# set the request's network credentials for an authenticated connection
- $ftprequest.Credentials = New-Object System.Net.NetworkCredential($username,$password)
- 
-$ftprequest.Method = [System.Net.WebRequestMethods+Ftp]::DownloadFile
- $ftprequest.UseBinary = $true
- $ftprequest.KeepAlive = $false
- 
-# send the ftp request to the server
- $ftpresponse = $ftprequest.GetResponse()
- 
-# get a download stream from the server response
- $responsestream = $ftpresponse.GetResponseStream()
- 
-# create the target file on the local system and the download buffer
- try
- {
- $targetfile = New-Object IO.FileStream ($targetpath,[IO.FileMode]::Create)
- "File created: $targetpath"
- [byte[]]$readbuffer = New-Object byte[] 1024
- 
-# loop through the download stream and send the data to the target file
- do{
- $readlength = $responsestream.Read($readbuffer,0,1024)
- $targetfile.Write($readbuffer,0,$readlength)
- }
- while ($readlength -ne 0)
- 
-$targetfile.close()
- }
- catch
- {
- $_|fl * -Force
- }
- 
-}
 
 [regex]$Finalrx='[^_]*$'
 foreach ($thing in $final){
