@@ -173,7 +173,7 @@ if($filelist -eq $null){
 
 	if (!(Test-Path "C:\FTPTest\error.txt"))
 	{
-		New-Item -path C:\FTPTest -name error.txt -type "file" -value "$theDate : Could not connect to S3. Please debug."
+		New-Item -path C:\FTPTest -name error.txt -type "file"
 	}
 
 	Add-Content -path C:\FTPTest\error.txt -value "$theDate : Could not connect to S3. Please debug."
